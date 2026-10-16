@@ -124,6 +124,11 @@ fn get_state(app: AppHandle) -> serde_json::Value {
 }
 
 #[tauri::command]
+fn last_target() -> String {
+    controller::LAST_TARGET.lock().unwrap().clone()
+}
+
+#[tauri::command]
 fn set_settings(app: AppHandle, settings: Settings) {
     let mic_changed = app.state::<AppState>().settings.read().unwrap().mic != settings.mic;
     update_settings(&app, |s| *s = settings);
@@ -230,7 +235,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_state, set_settings, perm_status, perm_action, microphones, record_shortcut,
             pick_choose, pick_key, pick_resize, compare_toggle, meter, open_url, model_download,
-            update_check, update_install
+            update_check, update_install, last_target
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]

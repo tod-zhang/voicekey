@@ -144,6 +144,8 @@ pub struct Ctl {
     choose_pending: bool,
     released_at: Option<Instant>,
     front: Option<pf::FrontApp>,
+    /// 本次输出目标是远程桌面客户端
+    remote: bool,
     last_emit: Instant,
     flush_pending: bool,
     /// 按下到判定长按之间已经打开的麦克风，确认开始后把这段音频交出去
@@ -162,6 +164,16 @@ enum Gate {
 }
 
 const PREROLL: usize = 50;
+
+/// 最近一次输出目标的进程名，设置页据此一键加入远程桌面列表
+pub static LAST_TARGET: Mutex<String> = Mutex::new(String::new());
+
+fn remote_target(s: &Settings, front: Option<pf::FrontApp>) -> bool {
+    let Some(exe) = front.and_then(|f| f.exe_name()) else { return false };
+    let remote = s.is_remote(&exe);
+    *LAST_TARGET.lock().unwrap() = exe;
+    remote
+}
 
 pub fn spawn(app: AppHandle, qwen: Arc<QwenEngine>, rx: UnboundedReceiver<Msg>) {
     let st = app.state::<AppState>();
@@ -202,6 +214,7 @@ pub fn spawn(app: AppHandle, qwen: Arc<QwenEngine>, rx: UnboundedReceiver<Msg>) 
         choose_pending: false,
         released_at: None,
         front: None,
+        remote: false,
         last_emit: Instant::now(),
         flush_pending: false,
         primed: None,
@@ -229,6 +242,14 @@ impl Ctl {
                     }
                 }
             }
+        }
+    }
+
+    fn output(&self, text: &str) {
+        if self.remote {
+            pf::paste_remote(text, self.settings().remote_delay);
+        } else {
+            pf::paste(text);
         }
     }
 
@@ -481,7 +502,9 @@ impl Ctl {
         self.auto_stop = auto_stop;
         self.gen += 1;
         self.mode = Mode::Single(s.channel);
-        self.typer = s.streaming.then(Typer::default);
+        // 远程桌面里边说边上屏的字符过不去，改为结束时一次性粘贴
+        self.remote = remote_target(&s, pf::front_app());
+        self.typer = (s.streaming && !self.remote).then(Typer::default);
         self.segs = Segments::default();
         let seg = self.segs.start();
         ui::hud(&self.app, "listen", "", s.channel);
@@ -631,7 +654,7 @@ impl Ctl {
                 }
                 if let Some(e) = error {
                     if !streamed && !text.is_empty() {
-                        pf::paste(&text);
+                        self.output(&text);
                     }
                     ui::hud_error(&self.app, &format!("识别失败：{e}"));
                 } else if streamed {
@@ -641,7 +664,7 @@ impl Ctl {
                     ui::hud_hide(&self.app, 1000);
                 } else {
                     ui::hud_hide(&self.app, 0);
-                    pf::paste(&text);
+                    self.output(&text);
                 }
             }
             Mode::Pick | Mode::Compare => {
@@ -830,13 +853,19 @@ impl Ctl {
             crate::update_settings(&self.app, |s| s.last_pick = Some(ch));
         }
         let front = self.front.take();
+        let s = self.settings();
+        let remote = remote_target(&s, front);
         self.cancel();
         tauri::async_runtime::spawn(async move {
             if let Some(f) = front {
                 f.activate();
             }
             tokio::time::sleep(Duration::from_millis(80)).await;
-            pf::paste(&text);
+            if remote {
+                pf::paste_remote(&text, s.remote_delay);
+            } else {
+                pf::paste(&text);
+            }
         });
     }
 

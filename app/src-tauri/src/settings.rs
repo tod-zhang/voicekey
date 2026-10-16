@@ -83,6 +83,12 @@ pub struct Settings {
     pub autostart: bool,
     pub theme: String,
     pub onboarded: bool,
+    /// 远程桌面兼容（Windows）：前台是这些程序时改为等剪贴板同步后粘贴
+    pub remote_compat: bool,
+    /// 进程名包含其中任一项（不区分大小写）即视为远程桌面客户端
+    pub remote_apps: Vec<String>,
+    /// 写入剪贴板后等多久再按粘贴键，给远程软件同步剪贴板留时间
+    pub remote_delay: u64,
 }
 
 impl Default for Settings {
@@ -101,6 +107,9 @@ impl Default for Settings {
             autostart: false,
             theme: "system".into(),
             onboarded: false,
+            remote_compat: true,
+            remote_apps: ["uu", "todesk", "sunlogin", "anydesk", "rustdesk", "parsec"].map(String::from).to_vec(),
+            remote_delay: 400,
         }
     }
 }
@@ -130,12 +139,19 @@ impl Settings {
             self.hold_key = voicekey_platform::hold_keys()[0].id.into();
         }
         self.silence = self.silence.clamp(1.0, 5.0);
+        self.remote_delay = self.remote_delay.clamp(100, 2000);
         let engines = Channel::engines();
         let mut multi: Vec<Channel> = engines.iter().copied().filter(|c| self.multi.contains(c)).collect();
         if multi.len() < 2 {
             multi = engines;
         }
         self.multi = multi;
+    }
+
+    /// 输出目标是否为远程桌面客户端
+    pub fn is_remote(&self, exe: &str) -> bool {
+        self.remote_compat
+            && self.remote_apps.iter().map(|a| a.trim().to_lowercase()).any(|a| !a.is_empty() && exe.contains(&a))
     }
 
     pub fn hold_code(&self) -> u32 {

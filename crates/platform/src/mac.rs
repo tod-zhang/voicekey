@@ -19,6 +19,13 @@ struct CGRect {
     h: f64,
 }
 
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
 type TapCallback = extern "C" fn(Ref, u32, Ref, Ref) -> Ref;
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -32,6 +39,9 @@ extern "C" {
     fn CGEventKeyboardGetUnicodeString(e: Ref, max: usize, actual: *mut usize, buf: *mut u16);
     fn CGEventKeyboardSetUnicodeString(e: Ref, len: usize, buf: *const u16);
     fn CGEventCreateKeyboardEvent(src: Ref, key: u16, down: bool) -> Ref;
+    fn CGEventCreate(src: Ref) -> Ref;
+    fn CGEventGetLocation(e: Ref) -> CGPoint;
+    fn CGEventCreateMouseEvent(src: Ref, kind: u32, pos: CGPoint, button: u32) -> Ref;
     fn CGEventPost(tap: u32, e: Ref);
     fn CGEventSourceCreate(state: i32) -> Ref;
     fn CFMachPortCreateRunLoopSource(alloc: Ref, port: Ref, order: isize) -> Ref;
@@ -56,6 +66,11 @@ extern "C" {
 const KEY_DOWN: u32 = 10;
 const KEY_UP: u32 = 11;
 const FLAGS_CHANGED: u32 = 12;
+const OTHER_MOUSE_DOWN: u32 = 25;
+const OTHER_MOUSE_UP: u32 = 26;
+const FIELD_MOUSE_BUTTON: u32 = 3;
+const FIELD_CLICK_STATE: u32 = 1;
+const MIDDLE_BUTTON: i64 = 2;
 const FIELD_KEYCODE: u32 = 9;
 const FIELD_AUTOREPEAT: u32 = 8;
 const FIELD_USER_DATA: u32 = 42;
@@ -102,8 +117,23 @@ extern "C" fn tap_cb(_proxy: Ref, kind: u32, event: Ref, _refcon: Ref) -> Ref {
     if unsafe { CGEventGetIntegerValueField(event, FIELD_USER_DATA) } == MAGIC {
         return event;
     }
-    let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) } as u32;
     let flags = unsafe { CGEventGetFlags(event) };
+    // 鼠标中键按下/松开当作修饰键事件交给同一个钩子
+    if kind == OTHER_MOUSE_DOWN || kind == OTHER_MOUSE_UP {
+        if unsafe { CGEventGetIntegerValueField(event, FIELD_MOUSE_BUTTON) } != MIDDLE_BUTTON {
+            return event;
+        }
+        let ev = KeyEvent {
+            kind: KeyKind::Modifier(kind == OTHER_MOUSE_DOWN),
+            code: keys::MOUSE_MIDDLE,
+            mods: mods(flags),
+            repeat: false,
+            chars: None,
+        };
+        let swallow = HOOK.lock().unwrap().as_mut().is_some_and(|f| f(&ev));
+        return if swallow { std::ptr::null_mut() } else { event };
+    }
+    let code = unsafe { CGEventGetIntegerValueField(event, FIELD_KEYCODE) } as u32;
     let kind = match kind {
         KEY_DOWN => KeyKind::Down,
         KEY_UP => KeyKind::Up,
@@ -134,7 +164,11 @@ extern "C" fn tap_cb(_proxy: Ref, kind: u32, event: Ref, _refcon: Ref) -> Ref {
 pub fn start_hook(f: HookFn) {
     *HOOK.lock().unwrap() = Some(f);
     std::thread::spawn(|| loop {
-        let mask = (1u64 << KEY_DOWN) | (1 << KEY_UP) | (1 << FLAGS_CHANGED);
+        let mask = (1u64 << KEY_DOWN)
+            | (1 << KEY_UP)
+            | (1 << FLAGS_CHANGED)
+            | (1 << OTHER_MOUSE_DOWN)
+            | (1 << OTHER_MOUSE_UP);
         let tap = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
         if tap.is_null() {
             std::thread::sleep(Duration::from_secs(2));
@@ -193,8 +227,30 @@ pub(crate) fn type_text(text: &str) {
     }
 }
 
-/// Windows 用于重放被吞掉的修饰键；macOS 不吞修饰键，无需重放
-pub fn inject_key(_code: u32, _down: bool) {}
+/// 重放被吞掉的按键：macOS 不吞修饰键，只需重放鼠标中键（在当前光标位置）
+pub fn inject_key(code: u32, down: bool) {
+    if code != keys::MOUSE_MIDDLE {
+        return;
+    }
+    unsafe {
+        let cur = CGEventCreate(std::ptr::null_mut());
+        if cur.is_null() {
+            return;
+        }
+        let pos = CGEventGetLocation(cur);
+        CFRelease(cur);
+        let kind = if down { OTHER_MOUSE_DOWN } else { OTHER_MOUSE_UP };
+        let e = CGEventCreateMouseEvent(std::ptr::null_mut(), kind, pos, MIDDLE_BUTTON as u32);
+        if e.is_null() {
+            return;
+        }
+        // 点击次数为 0 时部分 App 不认这次点击
+        CGEventSetIntegerValueField(e, FIELD_CLICK_STATE, 1);
+        CGEventSetIntegerValueField(e, FIELD_USER_DATA, MAGIC);
+        CGEventPost(0, e);
+        CFRelease(e);
+    }
+}
 
 /// 借剪贴板 + ⌘V 上屏，随后恢复原剪贴板（保留所有类型）
 pub fn paste(text: &str) {
@@ -351,7 +407,16 @@ pub fn front_app() -> Option<FrontApp> {
     Some(FrontApp(app.processIdentifier()))
 }
 
+/// 远程桌面兼容目前只用于 Windows 端，macOS 照常粘贴
+pub fn paste_remote(text: &str, _delay_ms: u64) {
+    paste(text);
+}
+
 impl FrontApp {
+    pub fn exe_name(&self) -> Option<String> {
+        None
+    }
+
     pub fn activate(&self) {
         use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
         if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(self.0) {
@@ -406,6 +471,9 @@ pub mod perm {
 pub mod keys {
     use crate::{HoldKey, Special, ALT, CTRL, FN, META, SHIFT};
 
+    /// 鼠标中键的虚拟键码（macOS 键码都小于 128，不会冲突）
+    pub const MOUSE_MIDDLE: u32 = 0xF002;
+
     pub fn modifier(code: u32) -> Option<(u8, &'static str)> {
         Some(match code {
             54 => (META, "右 ⌘"),
@@ -417,6 +485,7 @@ pub mod keys {
             56 => (SHIFT, "左 ⇧"),
             60 => (SHIFT, "右 ⇧"),
             63 => (FN, "Fn"),
+            MOUSE_MIDDLE => (0, "鼠标中键"),
             _ => return None,
         })
     }
@@ -477,6 +546,12 @@ pub mod keys {
             HoldKey { id: "rightMeta", code: 54, name: "右 ⌘" },
             HoldKey { id: "rightCtrl", code: 62, name: "右 ⌃" },
             HoldKey { id: "fn", code: 63, name: "Fn" },
+            HoldKey { id: "rightShift", code: 60, name: "右 ⇧" },
+            HoldKey { id: "leftAlt", code: 58, name: "左 ⌥" },
+            HoldKey { id: "leftMeta", code: 55, name: "左 ⌘" },
+            HoldKey { id: "leftCtrl", code: 59, name: "左 ⌃" },
+            HoldKey { id: "leftShift", code: 56, name: "左 ⇧" },
+            HoldKey { id: "middleMouse", code: MOUSE_MIDDLE, name: "鼠标中键" },
         ]
     }
 }

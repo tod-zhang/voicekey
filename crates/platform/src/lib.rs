@@ -9,7 +9,7 @@ mod win;
 #[cfg(windows)]
 use win as imp;
 
-pub use imp::{caret, front_app, inject_key, paste, secure_input, start_hook, FrontApp};
+pub use imp::{caret, front_app, inject_key, paste, paste_remote, secure_input, start_hook, FrontApp};
 
 pub const CTRL: u8 = 1;
 pub const ALT: u8 = 2;
@@ -49,7 +49,7 @@ pub enum Special {
     Digit(u8),
 }
 
-pub use imp::keys::{hold_keys, is_function_key, modifier, special};
+pub use imp::keys::{hold_keys, is_function_key, modifier, special, MOUSE_MIDDLE};
 
 /// 长按说话可选的修饰键
 pub struct HoldKey {

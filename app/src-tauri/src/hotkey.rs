@@ -128,7 +128,8 @@ fn handle(sh: &Shared, st: &Arc<Mutex<State>>, tx: &UnboundedSender<HotEvent>, e
                         }
                     });
                 }
-                s.held_swallowed = cfg!(windows);
+                // Windows 吞住修饰键；鼠标中键两端都吞，避免触发自动滚动/关闭标签页，短按时再重放
+                s.held_swallowed = cfg!(windows) || e.code == pf::MOUSE_MIDDLE;
                 return s.held_swallowed;
             }
             if pressed {

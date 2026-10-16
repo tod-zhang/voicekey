@@ -1,7 +1,16 @@
 <script lang="ts">
   import { app, save } from "../lib/store.svelte";
+  import { call } from "../lib/api";
   const s = $derived(app.s!);
   const all = $derived(s.channel === "all");
+  const win = $derived(app.info!.platform === "win");
+
+  let last = $state("");
+  $effect(() => {
+    if (win) call<string>("last_target").then((t) => (last = t));
+  });
+  const listed = $derived(!!last && s.remoteApps.some((a) => a.trim() && last.includes(a.trim().toLowerCase())));
+  const setApps = (v: string) => save({ remoteApps: v.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean) });
 </script>
 
 <h2>输出</h2>
@@ -16,3 +25,36 @@
     <button class="sw" class:on={s.liveText} onclick={() => save({ liveText: !s.liveText })} aria-label="胶囊显示实时文字"></button>
   </div>
 </div>
+
+{#if win}
+  <h3>远程桌面</h3>
+  <div class="group">
+    <div class="row">
+      <div class="lbl">远程桌面兼容<small>在 UU 远程等远控窗口里说话时，改为先同步剪贴板再自动按 Ctrl+V 上屏（远端需把 Ctrl 映射为 ⌘）。此时不边说边上屏，也不恢复原剪贴板</small></div>
+      <button class="sw" class:on={s.remoteCompat} onclick={() => save({ remoteCompat: !s.remoteCompat })} aria-label="远程桌面兼容"></button>
+    </div>
+    {#if s.remoteCompat}
+      <div class="row">
+        <div class="lbl">远控程序<small>进程名包含其中任一项即启用，用逗号或空格分隔</small></div>
+        <input class="txt" value={s.remoteApps.join(", ")} onchange={(e) => setApps(e.currentTarget.value)} />
+      </div>
+      {#if last}
+        <div class="row">
+          <div class="lbl">上次上屏的程序<small>{last}{listed ? " · 已按远控处理" : ""}</small></div>
+          {#if !listed}<button class="btn" onclick={() => save({ remoteApps: [...s.remoteApps, last.replace(/\.exe$/, "")] })}>加入远控程序</button>{/if}
+        </div>
+      {/if}
+      <div class="row">
+        <div class="lbl">粘贴前等待<small>给远控软件同步剪贴板的时间；粘贴出的是旧内容时调大</small></div>
+        <input type="range" min="100" max="2000" step="100" value={s.remoteDelay} oninput={(e) => save({ remoteDelay: +e.currentTarget.value })} />
+        <b class="val">{s.remoteDelay} ms</b>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .txt { width: 220px; padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--rs); background: var(--card2); color: inherit; font: inherit; }
+  input[type="range"] { accent-color: var(--accent); width: 160px; }
+  .val { width: 64px; }
+</style>

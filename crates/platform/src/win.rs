@@ -1,22 +1,26 @@
 use crate::{HookFn, KeyEvent, KeyKind, MicStatus, Rect, ALT, CTRL, META, SHIFT};
 use std::sync::Mutex;
 use std::time::Duration;
-use windows::core::Interface;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::core::{Interface, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, MAPVK_VK_TO_CHAR, VIRTUAL_KEY,
+    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_CHAR, MAPVK_VK_TO_VSC, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEINPUT,
+    VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
     SetForegroundWindow, SetWindowsHookExW, TranslateMessage, GUITHREADINFO, HC_ACTION, KBDLLHOOKSTRUCT, MSG,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+    MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_SYSKEYDOWN,
 };
 
 /// 自己注入的事件打标记（dwExtraInfo），钩子里跳过
@@ -66,6 +70,31 @@ unsafe extern "system" fn ll_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> 
     CallNextHookEx(None, code, wparam, lparam)
 }
 
+/// 鼠标中键按下/松开当作修饰键事件交给同一个钩子（键码 VK_MBUTTON）
+unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let msg = wparam.0 as u32;
+    if code == HC_ACTION as i32 && (msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP) {
+        let m = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+        if m.dwExtraInfo != MAGIC {
+            let mut st = STATE.lock().unwrap();
+            let pressed = msg == WM_MBUTTONDOWN;
+            let ev = KeyEvent {
+                kind: KeyKind::Modifier(pressed),
+                code: keys::MOUSE_MIDDLE,
+                mods: mods(&st.down),
+                repeat: false,
+                chars: None,
+            };
+            if let Some(f) = st.hook.as_mut() {
+                if f(&ev) {
+                    return LRESULT(1);
+                }
+            }
+        }
+    }
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
 pub fn start_hook(f: HookFn) {
     STATE.lock().unwrap().hook = Some(f);
     std::thread::spawn(|| unsafe {
@@ -73,6 +102,7 @@ pub fn start_hook(f: HookFn) {
         if SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), module.map(Into::into), 0).is_err() {
             return;
         }
+        let _ = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), module.map(Into::into), 0);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -97,6 +127,12 @@ fn send(inputs: &[INPUT]) {
 }
 
 pub fn inject_key(code: u32, down: bool) {
+    if code == keys::MOUSE_MIDDLE {
+        let flags = if down { MOUSEEVENTF_MIDDLEDOWN } else { MOUSEEVENTF_MIDDLEUP };
+        let mi = MOUSEINPUT { dwFlags: flags, dwExtraInfo: MAGIC, ..Default::default() };
+        send(&[INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi } }]);
+        return;
+    }
     let flags = if down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
     send(&[key_input(code as u16, 0, flags)]);
 }
@@ -153,6 +189,23 @@ pub fn paste(text: &str) {
     });
 }
 
+/// 远程桌面窗口：远程软件只转发按键码，Unicode 字符事件和瞬间按下的 Ctrl+V 都到不了对端。
+/// 先写剪贴板，等远程软件把剪贴板同步过去，再逐键按下带扫描码的 Ctrl+V；不恢复原剪贴板，以免同步回去覆盖
+pub fn paste_remote(text: &str, delay_ms: u64) {
+    if arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)).is_err() {
+        paste(text);
+        return;
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        for (vk, flags) in [(0x11, KEYBD_EVENT_FLAGS(0)), (0x56, KEYBD_EVENT_FLAGS(0)), (0x56, KEYEVENTF_KEYUP), (0x11, KEYEVENTF_KEYUP)] {
+            let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16;
+            send(&[key_input(vk, scan, flags)]);
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    });
+}
+
 /// 当前输入焦点的插入符屏幕坐标（物理像素）：先取 Win32 caret，再取 MSAA caret（Chromium 等）
 pub fn caret() -> Option<Rect> {
     unsafe {
@@ -198,6 +251,25 @@ impl FrontApp {
             let _ = SetForegroundWindow(HWND(self.0 as *mut _));
         }
     }
+
+    /// 窗口所属进程的 exe 文件名（小写），如 notepad.exe
+    pub fn exe_name(&self) -> Option<String> {
+        unsafe {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(HWND(self.0 as *mut _), Some(&mut pid));
+            if pid == 0 {
+                return None;
+            }
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let r = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+            let _ = CloseHandle(h);
+            r.ok()?;
+            let path = String::from_utf16_lossy(&buf[..len as usize]);
+            path.rsplit('\\').next().map(str::to_lowercase)
+        }
+    }
 }
 
 pub mod perm {
@@ -219,6 +291,9 @@ pub mod perm {
 pub mod keys {
     use crate::{HoldKey, Special, ALT, CTRL, META, SHIFT};
 
+    /// VK_MBUTTON
+    pub const MOUSE_MIDDLE: u32 = 0x04;
+
     pub fn modifier(code: u32) -> Option<(u8, &'static str)> {
         Some(match code {
             0xA0 => (SHIFT, "左 Shift"),
@@ -229,6 +304,7 @@ pub mod keys {
             0xA5 => (ALT, "右 Alt"),
             0x5B => (META, "左 Win"),
             0x5C => (META, "右 Win"),
+            MOUSE_MIDDLE => (0, "鼠标中键"),
             _ => return None,
         })
     }
@@ -280,6 +356,10 @@ pub mod keys {
             HoldKey { id: "rightAlt", code: 0xA5, name: "右 Alt" },
             HoldKey { id: "rightCtrl", code: 0xA3, name: "右 Ctrl" },
             HoldKey { id: "rightShift", code: 0xA1, name: "右 Shift" },
+            HoldKey { id: "leftAlt", code: 0xA4, name: "左 Alt" },
+            HoldKey { id: "leftCtrl", code: 0xA2, name: "左 Ctrl" },
+            HoldKey { id: "leftShift", code: 0xA0, name: "左 Shift" },
+            HoldKey { id: "middleMouse", code: MOUSE_MIDDLE, name: "鼠标中键" },
         ]
     }
 }
