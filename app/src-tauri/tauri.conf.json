@@ -20,7 +20,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM0NzEzNEIwMjMxMzk3OUYKUldTZmx4TWpzRFJ4eEJ4SEVBSGhkNFpLcjQvTGQ4TWw2cGI5MHFscURCL2grNGxMSEdrK3ZMRTgK",
-      "endpoints": ["https://github.com/J3n5en/voicekey/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/tod-zhang/voicekey/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
   },
