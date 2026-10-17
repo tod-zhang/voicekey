@@ -10,7 +10,9 @@
     if (win) call<string>("last_target").then((t) => (last = t));
   });
   const listed = $derived(!!last && s.remoteApps.some((a) => a.trim() && last.includes(a.trim().toLowerCase())));
-  const setApps = (v: string) => save({ remoteApps: v.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean) });
+  const split = (v: string) => v.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean);
+  const setApps = (v: string) => save({ remoteApps: split(v) });
+  const setPasteApps = (v: string) => save({ pasteApps: split(v) });
 </script>
 
 <h2>输出</h2>
@@ -20,6 +22,12 @@
     <div class="lbl">边说边上屏<small>{all ? "「多渠道」模式下需先挑选结果，此项不可用" : "识别中的文字实时打到光标处，结束后按定稿修正；关闭后改为结束时一次性粘贴"}</small></div>
     <button class="sw" class:on={s.streaming} disabled={all} onclick={() => save({ streaming: !s.streaming })} aria-label="边说边上屏"></button>
   </div>
+  {#if win && s.streaming && !all}
+    <div class="row">
+      <div class="lbl">只粘贴的程序<small>这些程序收不到逐字打出的文字（如微信会把部分字变成标点），改为结束时一次性粘贴；进程名包含其中任一项即生效，用逗号或空格分隔</small></div>
+      <input class="txt" value={s.pasteApps.join(", ")} onchange={(e) => setPasteApps(e.currentTarget.value)} />
+    </div>
+  {/if}
   <div class="row">
     <div class="lbl">胶囊显示实时文字<small>在屏幕底部胶囊中预览识别内容</small></div>
     <button class="sw" class:on={s.liveText} onclick={() => save({ liveText: !s.liveText })} aria-label="胶囊显示实时文字"></button>

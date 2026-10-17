@@ -13,6 +13,7 @@ export interface Settings {
   channel: Channel; holdKey: string; tapShortcut: Shortcut | null; silence: number; streaming: boolean;
   liveText: boolean; mic: string; multi: Channel[]; lastPick: Channel | null; autostart: boolean; theme: string; onboarded: boolean;
   remoteCompat: boolean; remoteApps: string[]; remoteDelay: number; remoteStreaming: boolean;
+  pasteApps: string[];
 }
 export interface OfflineStatus { state: "missing" | "downloading" | "ready" | "failed"; progress?: number; error?: string }
 export interface Perms { accessibility: boolean; mic: "granted" | "denied" | "undetermined" }

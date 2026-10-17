@@ -91,6 +91,9 @@ pub struct Settings {
     pub remote_delay: u64,
     /// 远程桌面里也边说边上屏（实验）：分段经剪贴板粘贴
     pub remote_streaming: bool,
+    /// 不接受逐字模拟输入的程序（Windows，进程名包含其中任一项）：边说边上屏改为结束时一次性粘贴。
+    /// 微信的输入框会把注入的 Unicode 按键错认成逗号、句号等符号
+    pub paste_apps: Vec<String>,
 }
 
 impl Default for Settings {
@@ -113,6 +116,7 @@ impl Default for Settings {
             remote_apps: ["uu", "todesk", "sunlogin", "anydesk", "rustdesk", "parsec"].map(String::from).to_vec(),
             remote_delay: 400,
             remote_streaming: false,
+            paste_apps: ["weixin", "wechat"].map(String::from).to_vec(),
         }
     }
 }
@@ -155,6 +159,11 @@ impl Settings {
     pub fn is_remote(&self, exe: &str) -> bool {
         self.remote_compat
             && self.remote_apps.iter().map(|a| a.trim().to_lowercase()).any(|a| !a.is_empty() && exe.contains(&a))
+    }
+
+    /// 输出目标是否只能粘贴、不能逐字打字
+    pub fn is_paste_only(&self, exe: &str) -> bool {
+        self.paste_apps.iter().map(|a| a.trim().to_lowercase()).any(|a| !a.is_empty() && exe.contains(&a))
     }
 
     pub fn hold_code(&self) -> u32 {
