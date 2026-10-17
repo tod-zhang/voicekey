@@ -19,7 +19,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM0NzEzNEIwMjMxMzk3OUYKUldTZmx4TWpzRFJ4eEJ4SEVBSGhkNFpLcjQvTGQ4TWw2cGI5MHFscURCL2grNGxMSEdrK3ZMRTgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGOEJDMzlGRTk3N0VEMUEKUldRYTdYZnBuOE9MSC9ZZE1jM2dJOHBMZzJrVU9GbCs3d2NGUUU1MEpsTjdVWDZNeUNhVEcxb2gK",
       "endpoints": ["https://github.com/tod-zhang/voicekey/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
