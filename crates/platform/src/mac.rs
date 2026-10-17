@@ -412,6 +412,13 @@ pub fn paste_remote(text: &str, _delay_ms: u64) {
     paste(text);
 }
 
+pub(crate) fn remote_edit(back: usize, tail: &str, _delay_ms: u64) {
+    backspace(back);
+    if !tail.is_empty() {
+        paste(tail);
+    }
+}
+
 impl FrontApp {
     pub fn exe_name(&self) -> Option<String> {
         None

@@ -189,21 +189,53 @@ pub fn paste(text: &str) {
     });
 }
 
+/// 远程桌面的输出串行执行，避免两次粘贴的剪贴板互相覆盖
+static REMOTE_IO: Mutex<()> = Mutex::new(());
+
+/// 带扫描码、逐个间隔地按键：远控软件按扫描码转发，过快的连续按键可能被合并
+fn remote_keys(keys: &[(u16, KEYBD_EVENT_FLAGS)], gap_ms: u64) {
+    for &(vk, flags) in keys {
+        let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16;
+        send(&[key_input(vk, scan, flags)]);
+        std::thread::sleep(Duration::from_millis(gap_ms));
+    }
+}
+
+/// 等远控软件把剪贴板同步过去再按 Ctrl+V，按完再留出对端执行粘贴的时间，之后才能改剪贴板
+fn remote_paste_now(delay_ms: u64) {
+    std::thread::sleep(Duration::from_millis(delay_ms));
+    let up = KEYEVENTF_KEYUP;
+    remote_keys(&[(0x11, KEYBD_EVENT_FLAGS(0)), (0x56, KEYBD_EVENT_FLAGS(0)), (0x56, up), (0x11, up)], 30);
+    std::thread::sleep(Duration::from_millis((delay_ms / 2).max(100)));
+}
+
+fn set_clipboard(text: &str) -> bool {
+    arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)).is_ok()
+}
+
 /// 远程桌面窗口：远程软件只转发按键码，Unicode 字符事件和瞬间按下的 Ctrl+V 都到不了对端。
 /// 先写剪贴板，等远程软件把剪贴板同步过去，再逐键按下带扫描码的 Ctrl+V；不恢复原剪贴板，以免同步回去覆盖
 pub fn paste_remote(text: &str, delay_ms: u64) {
-    if arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text)).is_err() {
-        paste(text);
-        return;
-    }
+    let text = text.to_owned();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(delay_ms));
-        for (vk, flags) in [(0x11, KEYBD_EVENT_FLAGS(0)), (0x56, KEYBD_EVENT_FLAGS(0)), (0x56, KEYEVENTF_KEYUP), (0x11, KEYEVENTF_KEYUP)] {
-            let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as u16;
-            send(&[key_input(vk, scan, flags)]);
-            std::thread::sleep(Duration::from_millis(30));
+        let _io = REMOTE_IO.lock().unwrap();
+        if set_clipboard(&text) {
+            remote_paste_now(delay_ms);
+        } else {
+            paste(&text);
         }
     });
+}
+
+/// 远程边说边上屏的一步：退格 back 个字，再粘贴 tail（同步执行）
+pub(crate) fn remote_edit(back: usize, tail: &str, delay_ms: u64) {
+    let _io = REMOTE_IO.lock().unwrap();
+    for _ in 0..back {
+        remote_keys(&[(0x08, KEYBD_EVENT_FLAGS(0)), (0x08, KEYEVENTF_KEYUP)], 8);
+    }
+    if !tail.is_empty() && set_clipboard(tail) {
+        remote_paste_now(delay_ms);
+    }
 }
 
 /// 当前输入焦点的插入符屏幕坐标（物理像素）：先取 Win32 caret，再取 MSAA caret（Chromium 等）

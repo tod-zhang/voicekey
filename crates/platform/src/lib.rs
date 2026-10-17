@@ -9,6 +9,8 @@ mod win;
 #[cfg(windows)]
 use win as imp;
 
+use std::sync::{Arc, Condvar, Mutex};
+
 pub use imp::{caret, front_app, inject_key, paste, paste_remote, secure_input, start_hook, FrontApp};
 
 pub const CTRL: u8 = 1;
@@ -130,5 +132,74 @@ impl Typer {
 
     pub fn finish(&mut self) {
         self.done = true;
+    }
+}
+
+/// 远程桌面里的边说边上屏：远控软件不转发字符事件，改为退格删掉分歧部分、新增部分经剪贴板粘贴。
+/// 每次粘贴都要等剪贴板同步，放到后台线程串行执行；期间到达的中间结果只保留最新一条
+pub struct RemoteTyper {
+    shared: Arc<(Mutex<RemoteState>, Condvar)>,
+}
+
+#[derive(Default)]
+struct RemoteState {
+    target: Vec<char>,
+    /// 不再接收新内容，追平最新结果后退出
+    finished: bool,
+    /// 未 finish 就被丢弃：立即停止
+    abandoned: bool,
+}
+
+impl RemoteTyper {
+    pub fn new(delay_ms: u64) -> Self {
+        let shared = Arc::new((Mutex::new(RemoteState::default()), Condvar::new()));
+        let sh = shared.clone();
+        std::thread::spawn(move || {
+            let mut typed: Vec<char> = Vec::new();
+            loop {
+                let target = {
+                    let (m, cv) = &*sh;
+                    let mut s = m.lock().unwrap();
+                    while s.target == typed && !s.finished && !s.abandoned {
+                        s = cv.wait(s).unwrap();
+                    }
+                    if s.abandoned || s.target == typed {
+                        return;
+                    }
+                    s.target.clone()
+                };
+                let common = typed.iter().zip(&target).take_while(|(a, b)| a == b).count();
+                let tail: String = target[common..].iter().collect();
+                imp::remote_edit(typed.len() - common, &tail, delay_ms);
+                typed = target;
+            }
+        });
+        Self { shared }
+    }
+
+    pub fn update(&mut self, text: &str) {
+        let (m, cv) = &*self.shared;
+        let mut s = m.lock().unwrap();
+        if !s.finished {
+            s.target = text.chars().collect();
+            cv.notify_one();
+        }
+    }
+
+    pub fn finish(&mut self) {
+        let (m, cv) = &*self.shared;
+        m.lock().unwrap().finished = true;
+        cv.notify_one();
+    }
+}
+
+impl Drop for RemoteTyper {
+    fn drop(&mut self) {
+        let (m, cv) = &*self.shared;
+        let mut s = m.lock().unwrap();
+        if !s.finished {
+            s.abandoned = true;
+        }
+        cv.notify_one();
     }
 }

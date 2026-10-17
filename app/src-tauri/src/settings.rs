@@ -89,6 +89,8 @@ pub struct Settings {
     pub remote_apps: Vec<String>,
     /// 写入剪贴板后等多久再按粘贴键，给远程软件同步剪贴板留时间
     pub remote_delay: u64,
+    /// 远程桌面里也边说边上屏（实验）：分段经剪贴板粘贴
+    pub remote_streaming: bool,
 }
 
 impl Default for Settings {
@@ -110,6 +112,7 @@ impl Default for Settings {
             remote_compat: true,
             remote_apps: ["uu", "todesk", "sunlogin", "anydesk", "rustdesk", "parsec"].map(String::from).to_vec(),
             remote_delay: 400,
+            remote_streaming: false,
         }
     }
 }

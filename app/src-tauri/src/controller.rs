@@ -135,7 +135,7 @@ pub struct Ctl {
     auto_stop: bool,
     heard_voice: bool,
     last_voice: Instant,
-    typer: Option<Typer>,
+    typer: Option<Out>,
     segs: Segments,
     rows: Vec<Row>,
     row_segs: Vec<Segments>,
@@ -164,6 +164,28 @@ enum Gate {
 }
 
 const PREROLL: usize = 50;
+
+/// 边说边上屏：本机直接打字；远程桌面经剪贴板分段粘贴
+enum Out {
+    Local(Typer),
+    Remote(pf::RemoteTyper),
+}
+
+impl Out {
+    fn update(&mut self, text: &str) {
+        match self {
+            Out::Local(t) => t.update(text),
+            Out::Remote(t) => t.update(text),
+        }
+    }
+
+    fn finish(&mut self) {
+        match self {
+            Out::Local(t) => t.finish(),
+            Out::Remote(t) => t.finish(),
+        }
+    }
+}
 
 /// 最近一次输出目标的进程名，设置页据此一键加入远程桌面列表
 pub static LAST_TARGET: Mutex<String> = Mutex::new(String::new());
@@ -504,7 +526,11 @@ impl Ctl {
         self.mode = Mode::Single(s.channel);
         // 远程桌面里边说边上屏的字符过不去，改为结束时一次性粘贴
         self.remote = remote_target(&s, pf::front_app());
-        self.typer = (s.streaming && !self.remote).then(Typer::default);
+        self.typer = match (s.streaming, self.remote) {
+            (false, _) => None,
+            (true, false) => Some(Out::Local(Typer::default())),
+            (true, true) => s.remote_streaming.then(|| Out::Remote(pf::RemoteTyper::new(s.remote_delay))),
+        };
         self.segs = Segments::default();
         let seg = self.segs.start();
         ui::hud(&self.app, "listen", "", s.channel);

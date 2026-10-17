@@ -30,7 +30,7 @@
   <h3>远程桌面</h3>
   <div class="group">
     <div class="row">
-      <div class="lbl">远程桌面兼容<small>在 UU 远程等远控窗口里说话时，改为先同步剪贴板再自动按 Ctrl+V 上屏（远端需把 Ctrl 映射为 ⌘）。此时不边说边上屏，也不恢复原剪贴板</small></div>
+      <div class="lbl">远程桌面兼容<small>在 UU 远程等远控窗口里说话时，改为先同步剪贴板再自动按 Ctrl+V 上屏（远端需把 Ctrl 映射为 ⌘），不恢复原剪贴板</small></div>
       <button class="sw" class:on={s.remoteCompat} onclick={() => save({ remoteCompat: !s.remoteCompat })} aria-label="远程桌面兼容"></button>
     </div>
     {#if s.remoteCompat}
@@ -44,6 +44,10 @@
           {#if !listed}<button class="btn" onclick={() => save({ remoteApps: [...s.remoteApps, last.replace(/\.exe$/, "")] })}>加入远控程序</button>{/if}
         </div>
       {/if}
+      <div class="row">
+        <div class="lbl">远程边说边上屏（实验）<small>{s.streaming && !all ? "说话时就分段粘贴到远端：文字会一顿一顿出现，识别修正时会删掉重打，期间剪贴板不断变化" : "需先开启上面的「边说边上屏」"}</small></div>
+        <button class="sw" class:on={s.remoteStreaming} disabled={!s.streaming || all} onclick={() => save({ remoteStreaming: !s.remoteStreaming })} aria-label="远程边说边上屏"></button>
+      </div>
       <div class="row">
         <div class="lbl">粘贴前等待<small>给远控软件同步剪贴板的时间；粘贴出的是旧内容时调大</small></div>
         <input type="range" min="100" max="2000" step="100" value={s.remoteDelay} oninput={(e) => save({ remoteDelay: +e.currentTarget.value })} />
