@@ -407,21 +407,88 @@ pub fn front_app() -> Option<FrontApp> {
     Some(FrontApp(app.processIdentifier()))
 }
 
-/// 远程桌面兼容目前只用于 Windows 端，macOS 照常粘贴
-pub fn paste_remote(text: &str, _delay_ms: u64) {
-    paste(text);
+/// 远程桌面的输出串行执行，避免两次粘贴的剪贴板互相覆盖
+static REMOTE_IO: Mutex<()> = Mutex::new(());
+
+/// 逐个间隔地按键：远控软件按键码转发，Unicode 字符事件过不去，过快的连续按键也可能被合并
+fn remote_keys(keys: &[(u16, bool, u64)], gap_ms: u64) {
+    let src = private_source();
+    for &(code, down, flags) in keys {
+        unsafe {
+            let e = CGEventCreateKeyboardEvent(src, code, down);
+            if e.is_null() {
+                continue;
+            }
+            CGEventSetFlags(e, flags);
+            CGEventSetIntegerValueField(e, FIELD_USER_DATA, MAGIC);
+            CGEventPost(0, e);
+            CFRelease(e);
+        }
+        std::thread::sleep(Duration::from_millis(gap_ms));
+    }
 }
 
-pub(crate) fn remote_edit(back: usize, tail: &str, _delay_ms: u64) {
-    backspace(back);
-    if !tail.is_empty() {
-        paste(tail);
+fn set_clipboard(text: &str) -> bool {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use objc2_foundation::NSString;
+    unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        pb.setString_forType(&NSString::from_str(text), NSPasteboardTypeString)
+    }
+}
+
+/// 等远控软件把剪贴板同步过去，再逐键按下 ⌘ 和 V（单独的 ⌘ 按下/松开事件，远控软件靠它同步修饰键），
+/// 按完再留出对端执行粘贴的时间，之后才能改剪贴板
+fn remote_paste_now(delay_ms: u64) {
+    std::thread::sleep(Duration::from_millis(delay_ms));
+    remote_keys(&[(55, true, F_CMD), (9, true, F_CMD), (9, false, F_CMD), (55, false, 0)], 30);
+    std::thread::sleep(Duration::from_millis((delay_ms / 2).max(100)));
+}
+
+/// 远程桌面窗口：先写剪贴板，等远控软件同步过去，再逐键按 ⌘V；不恢复原剪贴板，以免同步回去覆盖
+pub fn paste_remote(text: &str, delay_ms: u64) {
+    let text = text.to_owned();
+    std::thread::spawn(move || {
+        let _io = REMOTE_IO.lock().unwrap();
+        if set_clipboard(&text) {
+            remote_paste_now(delay_ms);
+        } else {
+            paste(&text);
+        }
+    });
+}
+
+/// 远程边说边上屏的一步：退格 back 个字，再粘贴 tail（同步执行）
+pub(crate) fn remote_edit(back: usize, tail: &str, delay_ms: u64) {
+    let _io = REMOTE_IO.lock().unwrap();
+    for _ in 0..back {
+        remote_keys(&[(51, true, 0), (51, false, 0)], 8);
+    }
+    if !tail.is_empty() && set_clipboard(tail) {
+        remote_paste_now(delay_ms);
     }
 }
 
 impl FrontApp {
+    /// 应用名加 Bundle ID，如 "uu远程 (com.netease.uuremote)"，小写，供远控/只粘贴列表按包含匹配
     pub fn exe_name(&self) -> Option<String> {
-        None
+        use objc2_app_kit::NSRunningApplication;
+        let app = NSRunningApplication::runningApplicationWithProcessIdentifier(self.0)?;
+        #[allow(unused_unsafe)]
+        let (name, id) = unsafe {
+            (
+                app.localizedName().map(|n| n.to_string()).unwrap_or_default(),
+                app.bundleIdentifier().map(|n| n.to_string()).unwrap_or_default(),
+            )
+        };
+        let s = match (name.is_empty(), id.is_empty()) {
+            (true, true) => return None,
+            (false, true) => name,
+            (true, false) => id,
+            (false, false) => format!("{name} ({id})"),
+        };
+        Some(s.to_lowercase())
     }
 
     pub fn activate(&self) {

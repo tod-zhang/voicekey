@@ -528,7 +528,8 @@ impl Ctl {
         let front = pf::front_app();
         self.remote = remote_target(&s, front);
         // 微信等程序会把逐字注入的字符错认成标点，同样改为结束时粘贴
-        let paste_only = front.and_then(|f| f.exe_name()).is_some_and(|exe| s.is_paste_only(&exe));
+        // 只粘贴列表目前只在 Windows 端可设置
+        let paste_only = cfg!(windows) && front.and_then(|f| f.exe_name()).is_some_and(|exe| s.is_paste_only(&exe));
         self.typer = match (s.streaming && !paste_only, self.remote) {
             (false, _) => None,
             (true, false) => Some(Out::Local(Typer::default())),
