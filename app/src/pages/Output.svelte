@@ -6,8 +6,12 @@
   const win = $derived(app.info!.platform === "win");
 
   let last = $state("");
+  // 设置页开着时也会去别的窗口说话，定时刷新
   $effect(() => {
-    call<string>("last_target").then((t) => (last = t));
+    const load = () => call<string>("last_target").then((t) => (last = t));
+    load();
+    const id = setInterval(load, 1500);
+    return () => clearInterval(id);
   });
   // macOS 上记录的是 "应用名 (Bundle ID)"，加入列表时取不含空格的 Bundle ID
   const appName = (t: string) => t.match(/\(([^)]+)\)$/)?.[1] ?? t.replace(/\.exe$/, "");
