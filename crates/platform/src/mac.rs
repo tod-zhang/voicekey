@@ -58,6 +58,7 @@ extern "C" {
     fn AXUIElementCopyParameterizedAttributeValue(el: Ref, attr: CFStringRef, param: Ref, out: *mut Ref) -> i32;
     fn AXUIElementSetMessagingTimeout(el: Ref, t: f32) -> i32;
     fn AXUIElementCreateApplication(pid: i32) -> Ref;
+    fn AXUIElementGetPid(el: Ref, pid: *mut i32) -> i32;
     fn AXValueCreate(kind: u32, value: *const c_void) -> Ref;
     fn AXValueGetValue(v: Ref, kind: u32, out: *mut c_void) -> bool;
     static kAXTrustedCheckOptionPrompt: CFStringRef;
@@ -401,8 +402,20 @@ pub fn secure_input() -> bool {
     unsafe { IsSecureEventInputEnabled() != 0 }
 }
 
+/// 先问辅助功能拿当前焦点应用：NSWorkspace 的 frontmostApplication 在后台线程里可能停在旧值
+/// （如切到 UU 远程后仍报微信），取不到时再退回它
 pub fn front_app() -> Option<FrontApp> {
     use objc2_app_kit::NSWorkspace;
+    unsafe {
+        let sys = CFType::wrap_under_create_rule(AXUIElementCreateSystemWide() as _);
+        AXUIElementSetMessagingTimeout(sys.as_CFTypeRef() as Ref, 0.3);
+        if let Some(app) = ax_attr(sys.as_CFTypeRef() as Ref, "AXFocusedApplication") {
+            let mut pid = 0;
+            if AXUIElementGetPid(app.as_CFTypeRef() as Ref, &mut pid) == 0 && pid > 0 {
+                return Some(FrontApp(pid));
+            }
+        }
+    }
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
     Some(FrontApp(app.processIdentifier()))
 }
