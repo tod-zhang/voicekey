@@ -171,7 +171,11 @@ pub fn start_hook(f: HookFn) {
             | (1 << FLAGS_CHANGED)
             | (1 << OTHER_MOUSE_DOWN)
             | (1 << OTHER_MOUSE_UP);
-        let tap = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
+        // 优先挂在 HID 层：UU 远程等远控软件在会话层用自己的钩子截走键盘，会话层的钩子就收不到按键了
+        let mut tap = unsafe { CGEventTapCreate(0, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
+        if tap.is_null() {
+            tap = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
+        }
         if tap.is_null() {
             std::thread::sleep(Duration::from_secs(2));
             continue;
