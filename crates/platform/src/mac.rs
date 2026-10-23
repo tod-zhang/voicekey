@@ -36,6 +36,7 @@ extern "C" {
     fn CGEventSetIntegerValueField(e: Ref, field: u32, v: i64);
     fn CGEventGetFlags(e: Ref) -> u64;
     fn CGEventSetFlags(e: Ref, f: u64);
+    fn CGEventSetType(e: Ref, kind: u32);
     fn CGEventKeyboardGetUnicodeString(e: Ref, max: usize, actual: *mut usize, buf: *mut u16);
     fn CGEventKeyboardSetUnicodeString(e: Ref, len: usize, buf: *const u16);
     fn CGEventCreateKeyboardEvent(src: Ref, key: u16, down: bool) -> Ref;
@@ -423,14 +424,23 @@ pub fn front_app() -> Option<FrontApp> {
 /// 远程桌面的输出串行执行，避免两次粘贴的剪贴板互相覆盖
 static REMOTE_IO: Mutex<()> = Mutex::new(());
 
-/// 逐个间隔地按键：远控软件按键码转发，Unicode 字符事件过不去，过快的连续按键也可能被合并
+/// 逐个间隔地按键：远控软件按键码转发，Unicode 字符事件过不去，过快的连续按键也可能被合并。
+/// 用 HID 系统状态的事件源，修饰键发成 flagsChanged，尽量和真实键盘一致（UU 远程对私有事件源发的 ⌘V 没反应）
 fn remote_keys(keys: &[(u16, bool, u64)], gap_ms: u64) {
-    let src = private_source();
+    static SRC: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+    let mut src = SRC.load(Ordering::Relaxed);
+    if src.is_null() {
+        src = unsafe { CGEventSourceCreate(1) };
+        SRC.store(src, Ordering::Relaxed);
+    }
     for &(code, down, flags) in keys {
         unsafe {
             let e = CGEventCreateKeyboardEvent(src, code, down);
             if e.is_null() {
                 continue;
+            }
+            if keys::modifier(code as u32).is_some() {
+                CGEventSetType(e, FLAGS_CHANGED);
             }
             CGEventSetFlags(e, flags);
             CGEventSetIntegerValueField(e, FIELD_USER_DATA, MAGIC);
@@ -455,7 +465,7 @@ fn set_clipboard(text: &str) -> bool {
 /// 按完再留出对端执行粘贴的时间，之后才能改剪贴板
 fn remote_paste_now(delay_ms: u64) {
     std::thread::sleep(Duration::from_millis(delay_ms));
-    remote_keys(&[(55, true, F_CMD), (9, true, F_CMD), (9, false, F_CMD), (55, false, 0)], 30);
+    remote_keys(&[(55, true, F_CMD), (9, true, F_CMD), (9, false, F_CMD), (55, false, 0)], 50);
     std::thread::sleep(Duration::from_millis((delay_ms / 2).max(100)));
 }
 
