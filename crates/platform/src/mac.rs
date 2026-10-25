@@ -48,6 +48,8 @@ extern "C" {
     fn CFMachPortCreateRunLoopSource(alloc: Ref, port: Ref, order: isize) -> Ref;
     fn CFRunLoopGetCurrent() -> Ref;
     fn CFRunLoopAddSource(rl: Ref, src: Ref, mode: CFStringRef);
+    fn CFRunLoopRemoveSource(rl: Ref, src: Ref, mode: CFStringRef);
+    fn CFMachPortInvalidate(port: Ref);
     fn CFRunLoopRun();
     fn CFRelease(p: Ref);
     static kCFRunLoopCommonModes: CFStringRef;
@@ -165,27 +167,46 @@ extern "C" fn tap_cb(_proxy: Ref, kind: u32, event: Ref, _refcon: Ref) -> Ref {
 /// 安装全局键盘钩子；无辅助功能权限时每 2 秒重试直到授权
 pub fn start_hook(f: HookFn) {
     *HOOK.lock().unwrap() = Some(f);
-    std::thread::spawn(|| loop {
+    std::thread::spawn(|| {
         let mask = (1u64 << KEY_DOWN)
             | (1 << KEY_UP)
             | (1 << FLAGS_CHANGED)
             | (1 << OTHER_MOUSE_DOWN)
             | (1 << OTHER_MOUSE_UP);
-        // 优先挂在 HID 层：UU 远程等远控软件在会话层用自己的钩子截走键盘，会话层的钩子就收不到按键了
-        let mut tap = unsafe { CGEventTapCreate(0, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
-        if tap.is_null() {
-            tap = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
-        }
-        if tap.is_null() {
-            std::thread::sleep(Duration::from_secs(2));
-            continue;
-        }
-        TAP.store(tap, Ordering::Relaxed);
-        unsafe {
-            let src = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), src, kCFRunLoopCommonModes);
-            CGEventTapEnable(tap, true);
-            CFRunLoopRun();
+        // 优先挂在 HID 层：UU 远程等远控软件在会话层用自己的钩子截走键盘，会话层的钩子就收不到按键了。
+        // HID 层的钩子一旦失效就改用会话层，不再反复重建
+        let mut hid = true;
+        loop {
+            let mut tap = std::ptr::null_mut();
+            if hid {
+                tap = unsafe { CGEventTapCreate(0, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
+                if tap.is_null() {
+                    hid = false;
+                }
+            }
+            if tap.is_null() {
+                tap = unsafe { CGEventTapCreate(1, 0, 0, mask, tap_cb, std::ptr::null_mut()) };
+            }
+            if tap.is_null() {
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+            TAP.store(tap, Ordering::Relaxed);
+            unsafe {
+                let rl = CFRunLoopGetCurrent();
+                let src = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap, 0);
+                CFRunLoopAddSource(rl, src, kCFRunLoopCommonModes);
+                CGEventTapEnable(tap, true);
+                // 钩子正常时不会返回；返回说明端口失效了，清理后稍等再重建，避免空转
+                CFRunLoopRun();
+                TAP.store(std::ptr::null_mut(), Ordering::Relaxed);
+                CFRunLoopRemoveSource(rl, src, kCFRunLoopCommonModes);
+                CFRelease(src);
+                CFMachPortInvalidate(tap);
+                CFRelease(tap);
+            }
+            hid = false;
+            std::thread::sleep(Duration::from_secs(1));
         }
     });
 }
