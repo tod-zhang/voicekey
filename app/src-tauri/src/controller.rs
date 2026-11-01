@@ -502,12 +502,13 @@ impl Ctl {
     fn spawn_engine(&mut self, ch: Channel, seg: usize, audio: voicekey_core::Audio) {
         let Some(engine) = self.engines.get(&ch).cloned() else { return };
         let (gen, tx) = (self.gen, self.tx.clone());
+        let script = self.settings.read().unwrap().script;
         self.tasks.push(tauri::async_runtime::spawn(async move {
             let ptx = tx.clone();
             let partial = Box::new(move |t: &str| {
-                let _ = ptx.send(Msg::Partial { gen, ch, seg, text: t.to_string() });
+                let _ = ptx.send(Msg::Partial { gen, ch, seg, text: script.convert(t) });
             });
-            let res = engine.run(audio, partial).await.map_err(|e| format!("{e:#}"));
+            let res = engine.run(audio, partial).await.map(|t| script.convert(&t)).map_err(|e| format!("{e:#}"));
             let _ = tx.send(Msg::Done { gen, ch, seg, res });
         }));
     }

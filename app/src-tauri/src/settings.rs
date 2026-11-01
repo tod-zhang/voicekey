@@ -48,6 +48,45 @@ impl Channel {
     }
 }
 
+/// 输出字形：识别渠道基本都返回简体，选繁体时上屏前按词转换
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Script {
+    /// 简体，原样输出
+    #[default]
+    Hans,
+    /// 繁体（台湾用字与用词）
+    Tw,
+    /// 繁体（香港用字）
+    Hk,
+}
+
+impl Script {
+    fn variant(self) -> Option<zhconv::Variant> {
+        match self {
+            Script::Hans => None,
+            Script::Tw => Some(zhconv::Variant::ZhTW),
+            Script::Hk => Some(zhconv::Variant::ZhHK),
+        }
+    }
+
+    pub fn convert(self, text: &str) -> String {
+        match self.variant() {
+            Some(v) if !text.is_empty() => zhconv::zhconv(text, v),
+            _ => text.to_string(),
+        }
+    }
+
+    /// 转换表首次使用时才构建，提前在后台建好，免得第一句话卡顿
+    pub fn warm(self) {
+        if let Some(v) = self.variant() {
+            std::thread::spawn(move || {
+                zhconv::get_builtin_converter(v);
+            });
+        }
+    }
+}
+
 /// 点按快捷键：单个修饰键（区分左右）或 修饰键+按键 组合
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Shortcut {
@@ -94,6 +133,8 @@ pub struct Settings {
     /// 不接受逐字模拟输入的程序（Windows，进程名包含其中任一项）：边说边上屏改为结束时一次性粘贴。
     /// 微信的输入框会把注入的 Unicode 按键错认成逗号、句号等符号
     pub paste_apps: Vec<String>,
+    /// 输出简体或繁体
+    pub script: Script,
 }
 
 impl Default for Settings {
@@ -117,6 +158,7 @@ impl Default for Settings {
             remote_delay: 400,
             remote_streaming: false,
             paste_apps: ["weixin", "wechat"].map(String::from).to_vec(),
+            script: Script::Hans,
         }
     }
 }
@@ -172,5 +214,18 @@ impl Settings {
 
     pub fn hold_name(&self) -> &'static str {
         voicekey_platform::hold_keys().iter().find(|k| k.id == self.hold_key).map_or("", |k| k.name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Script;
+
+    #[test]
+    fn script_convert() {
+        assert_eq!(Script::Hans.convert("软件发布了"), "软件发布了");
+        assert_eq!(Script::Tw.convert("这个软件很好用"), "這個軟體很好用");
+        assert_eq!(Script::Hk.convert("我们去后面看看"), "我們去後面看看");
+        assert_eq!(Script::Tw.convert(""), "");
     }
 }
