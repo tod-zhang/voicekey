@@ -8,12 +8,13 @@ import sogou from "../assets/logos/sogou.png";
 import iflytek from "../assets/logos/iflytek.png";
 
 export type Channel = "doubao" | "wetype" | "qwen" | "baidu" | "sogou" | "iflytek" | "offline" | "wetypeoffline" | "all";
+export type Script = "hans" | "tw" | "hk";
 export interface Shortcut { code: number; mods: number; name: string }
 export interface Settings {
   channel: Channel; holdKey: string; tapShortcut: Shortcut | null; silence: number; streaming: boolean;
   liveText: boolean; mic: string; multi: Channel[]; lastPick: Channel | null; autostart: boolean; theme: string; onboarded: boolean;
   remoteCompat: boolean; remoteApps: string[]; remoteDelay: number; remoteStreaming: boolean;
-  pasteApps: string[];
+  pasteApps: string[]; script: Script;
 }
 export interface OfflineStatus { state: "missing" | "downloading" | "ready" | "failed"; progress?: number; error?: string }
 export interface Perms { accessibility: boolean; mic: "granted" | "denied" | "undetermined" }

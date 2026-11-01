@@ -1,6 +1,6 @@
 <script lang="ts">
   import { app, save } from "../lib/store.svelte";
-  import { call } from "../lib/api";
+  import { call, type Script } from "../lib/api";
   const s = $derived(app.s!);
   const all = $derived(s.channel === "all");
   const win = $derived(app.info!.platform === "win");
@@ -18,6 +18,7 @@
   const listed = $derived(!!last && s.remoteApps.some((a) => a.trim() && last.includes(a.trim().toLowerCase())));
   const split = (v: string) => v.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean);
   const setApps = (v: string) => save({ remoteApps: split(v) });
+  const SCRIPTS: [Script, string][] = [["hans", "简体"], ["tw", "繁体（台湾）"], ["hk", "繁体（香港）"]];
   const setPasteApps = (v: string) => save({ pasteApps: split(v) });
 </script>
 
@@ -34,6 +35,12 @@
       <input class="txt" value={s.pasteApps.join(", ")} onchange={(e) => setPasteApps(e.currentTarget.value)} />
     </div>
   {/if}
+  <div class="row">
+    <div class="lbl">输出字形<small>识别结果默认为简体；选繁体时上屏前按词转换，如「软件」→「軟體」</small></div>
+    <div class="segc">
+      {#each SCRIPTS as [k, v]}<button class:on={s.script === k} onclick={() => save({ script: k })}>{v}</button>{/each}
+    </div>
+  </div>
   <div class="row">
     <div class="lbl">胶囊显示实时文字<small>在屏幕底部胶囊中预览识别内容</small></div>
     <button class="sw" class:on={s.liveText} onclick={() => save({ liveText: !s.liveText })} aria-label="胶囊显示实时文字"></button>

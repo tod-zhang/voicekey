@@ -52,6 +52,7 @@ pub fn update_settings<R: Runtime>(app: &AppHandle<R>, f: impl FnOnce(&mut Setti
     };
     apply(app, &s);
     download_model(app, s.channel);
+    s.script.warm();
     let _ = app.emit("settings", &s);
 }
 
@@ -227,6 +228,7 @@ fn main() {
         std::process::exit(code);
     }
     let settings = Settings::load();
+    settings.script.warm();
     let first_run = !settings.onboarded;
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| ui::show_settings(app)))
