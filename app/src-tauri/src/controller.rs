@@ -28,6 +28,8 @@ pub enum Msg {
     Meter(bool),
     RefreshMeter,
     MicrophonesChanged(Vec<String>),
+    /// 预开的麦克风超时未被认领
+    PrimeExpire(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
@@ -150,6 +152,7 @@ pub struct Ctl {
     flush_pending: bool,
     /// 按下到判定长按之间已经打开的麦克风，确认开始后把这段音频交出去
     primed: Option<Primed>,
+    prime_token: u64,
 }
 
 /// 预开麦：先环形缓存，确认录音后转成实时帧流
@@ -164,6 +167,8 @@ enum Gate {
 }
 
 const PREROLL: usize = 50;
+/// 预开麦最长保留时间，超过仍未开始录音就关掉
+const PRIME_TTL: Duration = Duration::from_secs(3);
 
 /// 边说边上屏：本机直接打字；远程桌面经剪贴板分段粘贴
 enum Out {
@@ -240,6 +245,7 @@ pub fn spawn(app: AppHandle, qwen: Arc<QwenEngine>, rx: UnboundedReceiver<Msg>) 
         last_emit: Instant::now(),
         flush_pending: false,
         primed: None,
+        prime_token: 0,
     };
     tauri::async_runtime::spawn(ctl.run(rx));
 }
@@ -283,7 +289,10 @@ impl Ctl {
         match m {
             Msg::Hot(e) => self.hot(e),
             Msg::Level(v) => {
-                let _ = self.app.emit("level", v);
+                // 仅预开麦时没有界面在显示电平，不必每 20ms 往各个窗口推一次
+                if self.recording || self.meter.is_some() {
+                    let _ = self.app.emit("level", v);
+                }
                 self.check_silence(v);
             }
             Msg::Partial { gen, ch, seg, text } if gen == self.gen => self.partial(ch, seg, text),
@@ -308,6 +317,7 @@ impl Ctl {
                 self.refresh_meter();
             }
             Msg::RefreshMeter => self.refresh_meter(),
+            Msg::PrimeExpire(token) if token == self.prime_token && self.primed.is_some() => self.disarm(),
             Msg::MicrophonesChanged(mics) => {
                 let _ = self.app.emit("microphones", mics);
                 self.refresh_meter();
@@ -455,6 +465,14 @@ impl Ctl {
             }
         });
         self.primed = Some(Primed { recorder, gate });
+        // 兜底：松开事件丢失或开始录音被拒（如对比模式中）时，预开的麦克风会一直开着，
+        // 持续采集并推电平，长时间挂着会吃满 CPU。正常长按 300ms 内就会被认领
+        self.prime_token += 1;
+        let (token, tx) = (self.prime_token, self.tx.clone());
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(PRIME_TTL).await;
+            let _ = tx.send(Msg::PrimeExpire(token));
+        });
     }
 
     fn disarm(&mut self) {
