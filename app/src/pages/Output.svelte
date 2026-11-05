@@ -18,7 +18,7 @@
   const listed = $derived(!!last && s.remoteApps.some((a) => a.trim() && last.includes(a.trim().toLowerCase())));
   const split = (v: string) => v.split(/[,，\s]+/).map((a) => a.trim()).filter(Boolean);
   const setApps = (v: string) => save({ remoteApps: split(v) });
-  const SCRIPTS: [Script, string][] = [["hans", "简体"], ["tw", "繁体（台湾）"], ["hk", "繁体（香港）"]];
+  const SCRIPTS: [Script, string][] = [["hans", "简体"], ["tw", "繁体（台湾）"]];
   const setPasteApps = (v: string) => save({ pasteApps: split(v) });
 </script>
 
