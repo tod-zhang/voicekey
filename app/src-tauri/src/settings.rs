@@ -55,10 +55,9 @@ pub enum Script {
     /// 简体，原样输出
     #[default]
     Hans,
-    /// 繁体（台湾用字与用词）
+    /// 繁体（台湾用字与用词）；旧版的「繁体（香港）」也读成台湾繁体，免得整份设置解析失败
+    #[serde(alias = "hk")]
     Tw,
-    /// 繁体（香港用字）
-    Hk,
 }
 
 impl Script {
@@ -66,7 +65,6 @@ impl Script {
         match self {
             Script::Hans => None,
             Script::Tw => Some(zhconv::Variant::ZhTW),
-            Script::Hk => Some(zhconv::Variant::ZhHK),
         }
     }
 
@@ -225,7 +223,12 @@ mod tests {
     fn script_convert() {
         assert_eq!(Script::Hans.convert("软件发布了"), "软件发布了");
         assert_eq!(Script::Tw.convert("这个软件很好用"), "這個軟體很好用");
-        assert_eq!(Script::Hk.convert("我们去后面看看"), "我們去後面看看");
+        assert_eq!(Script::Tw.convert("我们去后面看看"), "我們去後面看看");
         assert_eq!(Script::Tw.convert(""), "");
+    }
+
+    #[test]
+    fn legacy_hk_reads_as_tw() {
+        assert_eq!(serde_json::from_str::<Script>("\"hk\"").unwrap(), Script::Tw);
     }
 }

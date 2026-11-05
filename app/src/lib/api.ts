@@ -8,7 +8,7 @@ import sogou from "../assets/logos/sogou.png";
 import iflytek from "../assets/logos/iflytek.png";
 
 export type Channel = "doubao" | "wetype" | "qwen" | "baidu" | "sogou" | "iflytek" | "offline" | "wetypeoffline" | "all";
-export type Script = "hans" | "tw" | "hk";
+export type Script = "hans" | "tw";
 export interface Shortcut { code: number; mods: number; name: string }
 export interface Settings {
   channel: Channel; holdKey: string; tapShortcut: Shortcut | null; silence: number; streaming: boolean;
